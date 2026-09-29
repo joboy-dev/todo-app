@@ -20,10 +20,14 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 ## Project structure
 ```
 app/
-  page.tsx              # todo list UI (server component, fetches todos)
+  page.tsx              # server component: fetches todos, renders layout
   layout.tsx
-  actions.ts            # Server Actions: addTodo, toggleTodo, deleteTodo, editTodo
-  todo-item.tsx          # client component for per-todo interactivity
+  actions.ts            # Server Actions: addTodo, toggleTodo, editTodo, deleteTodo,
+                         #   updatePriority, updateDueDate, updateCategory,
+                         #   clearCompleted, toggleAll, reorderTodos
+  add-todo-form.tsx      # client component: new-todo form (title, priority, due date, category)
+  todo-app.tsx           # client component: search/filter/sort state, bulk actions, drag context
+  todo-item.tsx          # client component: single sortable todo row
 db/
   schema.ts             # Drizzle schema (todos table)
   client.ts             # libSQL client + drizzle instance (Turso in prod, local.db in dev)
@@ -39,18 +43,24 @@ todos {
   id: integer, primary key, autoincrement
   title: text, not null
   completed: integer (boolean), default 0
+  priority: text ("low" | "medium" | "high"), default "medium"
+  category: text, nullable          # free-text tag, e.g. "work"
+  dueDate: text, nullable           # ISO date "YYYY-MM-DD"
+  sortOrder: integer, default 0     # manual drag-and-drop order
   createdAt: text, default now
 }
 ```
 No user_id column — single shared list, no auth/ownership scoping.
 
 ## Request/workflow lifecycle
-1. **List todos**: `app/page.tsx` (server component) queries Drizzle directly at render time — no client fetch for initial load.
-2. **Create todo**: form calls `addTodo` Server Action → insert row → `revalidatePath("/")` → UI updates.
-3. **Toggle todo**: checkbox calls `toggleTodo` Server Action → update `completed` → revalidate.
-4. **Edit todo**: inline edit calls `editTodo` Server Action → update `title` → revalidate.
-5. **Delete todo**: delete button calls `deleteTodo` Server Action → remove row → revalidate.
-6. All writes go through Server Actions in `app/actions.ts` — no separate `/api/*` route handlers needed for this app's size.
+1. **List todos**: `app/page.tsx` (server component) queries Drizzle directly at render time, ordered by `sortOrder` — no client fetch for initial load.
+2. **Create todo**: `AddTodoForm` calls `addTodo` Server Action (title + priority + optional due date/category) → insert row with `sortOrder = max + 1` → `revalidatePath("/")`.
+3. **Toggle/edit fields**: checkbox/select/date/text inputs in `TodoItem` call `toggleTodo` / `editTodo` / `updatePriority` / `updateDueDate` / `updateCategory` on change or blur → revalidate.
+4. **Delete todo**: delete button calls `deleteTodo` → remove row → revalidate.
+5. **Bulk actions**: `clearCompleted` (deletes all completed rows) and `toggleAll` (marks every row complete/incomplete), triggered from the toolbar in `TodoApp`.
+6. **Search / filter / sort**: handled client-side in `TodoApp` over the full todo list passed down as props — no server round-trip. Status filter (all/active/completed), category filter, text search, and sort mode (manual/priority/due date) all compose together.
+7. **Drag-and-drop reorder** (`@dnd-kit`): only enabled when the view is unfiltered/unsorted (`sortMode === "manual"`, no search, no filters) — otherwise the visual order wouldn't match `sortOrder` and dragging would be confusing. On drop, `reorderTodos` persists the new `sortOrder` values.
+8. All writes go through Server Actions in `app/actions.ts` — no separate `/api/*` route handlers.
 
 ## Local dev
 - `npm run dev` — Next.js dev server (uses `local.db` file, gitignored)
